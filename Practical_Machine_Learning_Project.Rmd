@@ -1,0 +1,187 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Camilla Strauch"
+date: "22. aug. 2015"
+output: html_document
+---
+## Synopsis
+This report constitutes my __"Practical Machine Learning"__-Coursera project within the Data Science specialization offered by the John Hopkins University.
+
+The goal of the project is to use data from accelerometers on 6 participants to predict the manner in which they did a barbell-exercise. 
+
+The "classe" variable in the training set indicates how they did the exercise.
+The report describes how a __random forest__ predictive model was built from the other variables within the training set and cross validated. 
+
+The out of sample error for the prediction model is expected to be less than 3%. 
+The prediction model is used to predict 20 different test cases.
+
+More information related to the data is available from the website here: http://groupware.les.inf.puc-rio.br/har _(see the section on the Weight Lifting Exercise Dataset)._ 
+
+Information related to the Data Science- specialization is available here: 
+https://www.coursera.org/specialization/jhudatascience/1
+
+## 1. Data Processing
+### 1.1 Required Packages
+```{r results='hide'}
+library(AppliedPredictiveModeling)
+library(caret)
+library(randomForest)
+```
+
+### 1.2 Download the raw data files
+```{r cache=TRUE}
+TrainFileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+TestFileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+## enable https-download on windows
+setInternet2(TRUE)
+
+TrainFile = "./data/pml-training.csv"
+download.file(TrainFileUrl, destfile = TrainFile)
+
+TestFile = "./data/pml-testing.csv"
+download.file(TestFileUrl, destfile = TestFile)
+```
+
+
+### 1.3 Read in the raw data
+```{r, echo=TRUE}
+Train_df = read.csv(TrainFile, stringsAsFactors = TRUE, na.strings=c("NA",""))
+Test_df = read.csv(TestFile, stringsAsFactors = TRUE, na.strings=c("NA",""))
+```
+
+### 1.4 Identification of possible predictors
+Get all variables within the data set 
+```{r, echo=TRUE}
+variables <- names(Train_df)
+```
+
+Remove the calculated- and the sequence variables as predictors  
+```{r, echo=TRUE}
+index_excluded <- c( grep("X", variables),
+                         grep("new_window", variables),
+                         grep("num_window", variables),
+                         grep("avg", variables),
+                         grep("min", variables),
+                         grep("max", variables),
+                         grep("stddev", variables),
+                         grep("var", variables),
+                         grep("total", variables),
+                         grep("timestamp", variables),
+                         grep("classe", variables))
+InTrain_df <- Train_df[ , variables[-index_excluded]]
+InTest_df <- Test_df[ , variables[-index_excluded] ]
+```
+
+Only include variables without NA-values as predictors
+```{r, echo=TRUE}
+all_data<-apply(!is.na(InTrain_df),2,sum)==19622
+predictors <- names(InTrain_df[all_data])
+InTrain_df <-Train_df[, which(names(Train_df) %in% c(predictors,"classe"))]
+InTest_df <-Test_df[, which(names(Test_df) %in% predictors )]
+```
+
+Ensure that data types for predictors in the test data set is the same as in the training set
+```{r, echo=TRUE}
+for (i in (1:length(predictors))){
+     attributes(InTest_df[,(predictors[i])])$class<-attributes(InTrain_df[,(predictors[i])])$class
+}
+```
+
+## 2. Model generation and Crossvalidation scheme
+The train data is split into four data groups.
+Each of the data groups will be used to generate a random forest predictive model.
+The generated model will evaluated using data within the three other data groups.
+
+### 2.1 Split of the training data
+```{r cache=TRUE}
+set.seed(555)
+Split1Index = createDataPartition(InTrain_df$classe, p = 0.50,list=FALSE)
+
+Group2split1_Part = InTrain_df[-Split1Index,]
+Group2split2_Part = InTrain_df[ Split1Index,]
+
+Split2Index = createDataPartition(Group2split1_Part$classe, p = 0.50,list=FALSE)
+Split3Index = createDataPartition(Group2split2_Part$classe, p = 0.50,list=FALSE)
+
+## Data Groups for model generation
+Group1 = Group2split1_Part[-Split2Index,]
+Group2 = Group2split1_Part[Split2Index,]
+Group3 = Group2split2_Part[Split3Index,]
+Group4 = Group2split2_Part[-Split3Index,]
+
+## Data Groups for model validation
+NotGroup1 = rbind(Group2, Group3, Group4)
+NotGroup2 = rbind(Group1, Group3, Group4)
+NotGroup3 = rbind(Group1, Group2, Group4)
+NotGroup4 = rbind(Group1, Group2, Group3)
+```
+
+### 2.2 Generation of RandomForest prediction models
+A random forest model is generated using each of the 4 data groups
+```{r cache=TRUE}
+rf_model1 <- randomForest(classe ~. , data=Group1)
+rf_model2 <- randomForest(classe ~. , data=Group2)
+rf_model3 <- randomForest(classe ~. , data=Group3)
+rf_model4 <- randomForest(classe ~. , data=Group4)
+```
+
+### 2.3 Validation of the models
+A prediction is made using the out of sample data (that was not used when generating the model)
+```{r cache=TRUE }
+prediction1 <- predict(rf_model1, NotGroup1, type = "class")
+prediction2 <- predict(rf_model2, NotGroup2, type = "class")
+prediction3 <- predict(rf_model3, NotGroup3, type = "class")
+prediction4 <- predict(rf_model4, NotGroup4, type = "class")
+```
+
+The accuracy of the models is evaluated
+```{r cache=TRUE}
+cm1 <- confusionMatrix(prediction1, NotGroup1$classe)
+cm2 <- confusionMatrix(prediction2, NotGroup2$classe)
+cm3 <- confusionMatrix(prediction3, NotGroup3$classe)
+cm4 <- confusionMatrix(prediction4, NotGroup4$classe)
+
+Model_Accuracy <- rbind(cm1$overall[1], cm1$overall[2], cm1$overall[3], cm1$overall[4])
+Model_Accuracy
+```
+The models appear to be equally good and consistent with an out of sample error less than 3 %
+
+## 3.Prediction for submission
+### 3.1 Prediction on the test data using all models
+
+Predictions are made on the test data using the 4 random forest predictive models
+```{r }
+prediction_to_submit1 <- predict(rf_model1, InTest_df, type = "class")
+prediction_to_submit2 <- predict(rf_model2, InTest_df, type = "class")
+prediction_to_submit3 <- predict(rf_model3, InTest_df, type = "class")
+prediction_to_submit4 <- predict(rf_model4, InTest_df, type = "class")
+```
+
+It is checked whether the models give consistent results
+```{r }
+check_consistent <- (prediction_to_submit1 == prediction_to_submit2) &&
+                    (prediction_to_submit1 == prediction_to_submit3) &&
+                    (prediction_to_submit1 == prediction_to_submit4)
+check_consistent
+```
+It can be concluded that all models give the same prediction results
+
+### 3.2 Formatting the result for submission 
+Function for formatting the predictions in an appropriate format for automated grading
+```{r }
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+```
+
+### 3.3 The result
+Writing out the prediction results
+```{r }
+pml_write_files(prediction_to_submit1)
+```
+
